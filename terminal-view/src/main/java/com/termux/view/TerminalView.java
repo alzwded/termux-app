@@ -7,8 +7,10 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -27,11 +29,18 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewTreeObserver;
 import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.autofill.AutofillValue;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.Scroller;
+import android.widget.Toast;
+
+import androidx.core.view.ViewCompat;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
+import androidx.customview.widget.ExploreByTouchHelper;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -40,6 +49,8 @@ import com.termux.terminal.KeyHandler;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
+
+import java.util.List;
 
 /** View displaying and interacting with a {@link TerminalSession}. */
 public final class TerminalView extends View {
@@ -94,6 +105,8 @@ public final class TerminalView extends View {
     public final static int KEY_EVENT_SOURCE_SOFT_KEYBOARD = 0;
 
     private static final String LOG_TAG = "TerminalView";
+
+    private final TerminalViewTouchHelper mTerminalViewTouchHelper;
 
     public TerminalView(Context context, AttributeSet attributes) { // NO_UCD (unused code)
         super(context, attributes);
@@ -221,6 +234,10 @@ public final class TerminalView extends View {
         mScroller = new Scroller(context);
         AccessibilityManager am = (AccessibilityManager) context.getSystemService(Context.ACCESSIBILITY_SERVICE);
         mAccessibilityEnabled = am.isEnabled();
+
+        mTerminalViewTouchHelper = new TerminalViewTouchHelper(this);
+
+        ViewCompat.setAccessibilityDelegate(this, mTerminalViewTouchHelper);
     }
 
 
@@ -457,7 +474,10 @@ public final class TerminalView extends View {
         mEmulator.clearScrollCounter();
 
         invalidate();
-        if (mAccessibilityEnabled) setContentDescription(getText());
+        // per ExploreByTouchHelper, if anything changed in the virtual view, it must
+        // be invalidated; in a better world, I'd call invalidateVirtualView(*) instead
+        // of the whole tree, but that's for someone who understands this project
+        mTerminalViewTouchHelper.invalidateRoot();
     }
 
     /** This must be called by the hosting activity in {@link Activity#onContextMenuClosed(Menu)}
@@ -961,6 +981,9 @@ public final class TerminalView extends View {
             mTopRow = 0;
             scrollTo(0, 0);
             invalidate();
+            // amount of lines, or their width in pixels, has changed,
+            // hence the accessibility virtual tree is now invalid
+            mTerminalViewTouchHelper.invalidateRoot();
         }
     }
 
@@ -1356,6 +1379,80 @@ public final class TerminalView extends View {
                 case MotionEvent.ACTION_CANCEL:
                     showFloatingToolbar();
             }
+        }
+    }
+
+    private class TerminalViewTouchHelper extends ExploreByTouchHelper {
+        public TerminalViewTouchHelper(View host) {
+            super(host);
+        }
+
+        @Override
+        protected int getVirtualViewAt(float x, float y) {
+            // we know we're showing N many lines, all of the same height
+            final double lineHeight = ((float) getHeight()) / mEmulator.mRows;
+            // so the virtual view is y / lineHeight, rounded down
+            final int viewId = (int) Math.floor(y / lineHeight);
+            return viewId;
+        }
+
+        @Override
+        protected void getVisibleVirtualViews(List<Integer> virtualViewIds) {
+            // the amount of virtual views is the amount of screen lines
+            final int emulatorLines = mEmulator.mRows;
+
+            for (int line = 0; line < emulatorLines; line++) {
+                virtualViewIds.add(line);
+            }
+        }
+
+        @Override
+        protected void onPopulateEventForVirtualView(int virtualViewId, AccessibilityEvent event) {
+            String lineText = mEmulator.getSelectedText(
+                0, mTopRow + virtualViewId,
+                mEmulator.mColumns, mTopRow + virtualViewId);
+            //event.getText().add(lineText);
+            event.setContentDescription(lineText);
+        }
+
+        // when clicking on a line while accessibility services are
+        // running, copy the text, as it is less fiddly than trying
+        // to deal with selection and TextSelectionCursorController/HandleView
+        private boolean onLineClicked(int virtualViewId) {
+            String lineText = mEmulator.getSelectedText(
+                0, mTopRow + virtualViewId,
+                mEmulator.mColumns, mTopRow + virtualViewId);
+            ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = ClipData.newPlainText("line", lineText);
+            clipboard.setPrimaryClip(clip);
+            Toast toast = Toast.makeText(getContext(), "Line copied to clipboard", Toast.LENGTH_SHORT);
+            toast.show();
+            return true;
+        }
+
+        @Override
+        protected boolean onPerformActionForVirtualView(int virtualViewId, int action,
+                                                        Bundle arguments) {
+            switch (action) {
+                case AccessibilityNodeInfo.ACTION_CLICK:
+                    return onLineClicked(virtualViewId);
+            }
+
+            return false;
+        }
+
+        @Override
+        protected void onPopulateNodeForVirtualView(int virtualViewId, AccessibilityNodeInfoCompat node) {
+            String lineText = mEmulator.getSelectedText(
+                0, mTopRow + virtualViewId,
+                mEmulator.mColumns, mTopRow + virtualViewId);
+            node.setText(lineText);
+            node.setContentDescription(lineText);
+            final double lineHeight = ((float) getHeight()) / mEmulator.mRows;
+            node.setBoundsInParent(new Rect(0, (int) (virtualViewId * lineHeight), getWidth(), (int) ((virtualViewId + 1) * lineHeight))); // TODO needed?
+            node.addAction(AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK);
+            //node.setEnabled(true);
+            node.setClickable(true);
         }
     }
 
