@@ -214,6 +214,13 @@ public class TextSelectionCursorController implements CursorController {
         }, ActionMode.TYPE_FLOATING);
     }
 
+    public void updateSelectionFromAccessibility(int startX, int startY, int endX, int endY) {
+        mSelX1 = startX;
+        mSelY1 = startY;
+        mSelX2 = endX;
+        mSelY2 = endY;
+    }
+
     @Override
     public void updatePosition(TextSelectionHandleView handle, int x, int y) {
         TerminalBuffer screen = terminalView.mEmulator.getScreen();

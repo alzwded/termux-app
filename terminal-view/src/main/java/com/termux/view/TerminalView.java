@@ -35,7 +35,6 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.Scroller;
-import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -216,8 +215,7 @@ public final class TerminalView extends View {
             public void onLongPress(MotionEvent event) {
                 if (mGestureRecognizer.isInProgress()) return;
                 if (mClient.onLongPress(event)) return;
-                if (!isSelectingText() && !mAccessibilityEnabled) {
-                    // this is not accessible, should be fixed
+                if (!isSelectingText()) {
                     performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
                     startTextSelectionMode(event);
                 }
@@ -466,16 +464,14 @@ public final class TerminalView extends View {
         invalidate();
         //if (mAccessibilityEnabled) setContentDescription(getText());
         //sendAccessibilityEvent(AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT);
-        sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED);
-        sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
-        /*
-                event.setFromIndex(fromIndex);
-        event.setToIndex(toIndex);
-        event.setBeforeText(beforeText);
-         */
-
-        // TODO deal with selection somewhere
-        //sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED);
+        if (mAccessibilityEnabled) {
+            sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED);
+            sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+            // text updates could be made more granular...
+            //event.setFromIndex(fromIndex);
+            //event.setToIndex(toIndex);
+            //event.setBeforeText(beforeText);
+        }
     }
 
     @Override
@@ -504,6 +500,10 @@ public final class TerminalView extends View {
                 | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH
                 | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PAGE);
             node.addAction(AccessibilityNodeInfo.ACTION_SET_SELECTION);
+
+            if(isSelectingText()) {
+                node.addAction(AccessibilityNodeInfo.ACTION_COPY);
+            }
         }
 
         node.setEditable(true);
@@ -514,14 +514,42 @@ public final class TerminalView extends View {
 
     @Override
     public boolean performAccessibilityAction(int action, Bundle arguments) {
+        TextSelectionCursorController cursorController;
         switch (action) {
             case AccessibilityNodeInfo.ACTION_SET_SELECTION:
                 final int start = (arguments != null) ? arguments.getInt(
                     AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, -1) : -1;
                 final int end = (arguments != null) ? arguments.getInt(
                     AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, -1) : -1;
-                //return false;
-                break;
+                cursorController = getTextSelectionCursorController();
+                int x = 0, y = 0, i;
+                int startX = 0, startY = 0, endX = 0, endY = 0;
+                CharSequence text = getText();
+                for(i = 0; i < text.length(); ++i) {
+                    if(i == start) {
+                        startX = x;
+                        startY = y;
+                    } else if(i == end) {
+                        endX = x;
+                        endY = y;
+                    } else if(text.charAt(i) == '\n') {
+                        ++y;
+                        x = -x;
+                    } else if(x < 0) {
+                        x = 0;
+                    } else {
+                        ++x;
+                    }
+                }
+                cursorController.updateSelectionFromAccessibility(startX, startY, endX, endY);
+                return true;
+            case AccessibilityNodeInfo.ACTION_COPY:
+                cursorController = getTextSelectionCursorController();
+                String selectedText = cursorController.getSelectedText();
+                mTermSession.onCopyTextToClipboard(selectedText);
+                stopTextSelectionMode();
+                return true;
+
         }
 
         return super.performAccessibilityAction(action, arguments);
@@ -668,7 +696,7 @@ public final class TerminalView extends View {
         }
 
         mGestureRecognizer.onTouchEvent(event);
-        return !mAccessibilityEnabled;
+        return true;
     }
 
     @Override
