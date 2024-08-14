@@ -9,6 +9,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Typeface;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -27,11 +28,14 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewTreeObserver;
 import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.autofill.AutofillValue;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.Scroller;
+import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -212,7 +216,8 @@ public final class TerminalView extends View {
             public void onLongPress(MotionEvent event) {
                 if (mGestureRecognizer.isInProgress()) return;
                 if (mClient.onLongPress(event)) return;
-                if (!isSelectingText()) {
+                if (!isSelectingText() && !mAccessibilityEnabled) {
+                    // this is not accessible, should be fixed
                     performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
                     startTextSelectionMode(event);
                 }
@@ -221,6 +226,8 @@ public final class TerminalView extends View {
         mScroller = new Scroller(context);
         AccessibilityManager am = (AccessibilityManager) context.getSystemService(Context.ACCESSIBILITY_SERVICE);
         mAccessibilityEnabled = am.isEnabled();
+
+        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
     }
 
 
@@ -457,8 +464,57 @@ public final class TerminalView extends View {
         mEmulator.clearScrollCounter();
 
         invalidate();
-        if (mAccessibilityEnabled) setContentDescription(getText());
+        if (mAccessibilityEnabled) {
+            setContentDescription(getText());
+            sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED);
+            sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+        }
     }
+
+    /*
+    @Override
+    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo node) {
+        super.onInitializeAccessibilityNodeInfo(node);
+
+        CharSequence text = getText();
+        node.setText(text);
+
+        if(!TextUtils.isEmpty(text)) {
+            node.addAction(AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY);
+            node.addAction(AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY);
+            node.setMovementGranularities(AccessibilityNodeInfo.MOVEMENT_GRANULARITY_CHARACTER
+                | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_WORD
+                | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_LINE
+                | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH
+                | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PAGE);
+            node.addAction(AccessibilityNodeInfo.ACTION_SET_SELECTION);
+        }
+
+        node.setEditable(true);
+        node.setMultiLine(true);
+
+        // TODO if selected, add ACTION_COPY and ACTION_PASTE
+    }
+
+     */
+
+    /*
+    @Override
+    public boolean performAccessibilityAction(int action, Bundle arguments) {
+        switch (action) {
+            case AccessibilityNodeInfo.ACTION_SET_SELECTION:
+                final int start = (arguments != null) ? arguments.getInt(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, -1) : -1;
+                final int end = (arguments != null) ? arguments.getInt(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, -1) : -1;
+                //return false;
+                break;
+        }
+
+        return super.performAccessibilityAction(action, arguments);
+    }
+
+     */
 
     /** This must be called by the hosting activity in {@link Activity#onContextMenuClosed(Menu)}
      * when context menu for the {@link TerminalView} is started by
@@ -601,7 +657,7 @@ public final class TerminalView extends View {
         }
 
         mGestureRecognizer.onTouchEvent(event);
-        return true;
+        return !mAccessibilityEnabled;
     }
 
     @Override
@@ -987,6 +1043,7 @@ public final class TerminalView extends View {
     }
 
     private CharSequence getText() {
+        if(mEmulator == null) return "";
         return mEmulator.getScreen().getSelectedText(0, mTopRow, mEmulator.mColumns, mTopRow + mEmulator.mRows);
     }
 
