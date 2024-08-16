@@ -17,6 +17,7 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.ActionMode;
 import android.view.HapticFeedbackConstants;
 import android.view.InputDevice;
@@ -41,6 +42,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
 import com.termux.terminal.KeyHandler;
+import com.termux.terminal.Logger;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
@@ -98,6 +100,10 @@ public final class TerminalView extends View {
     public final static int KEY_EVENT_SOURCE_SOFT_KEYBOARD = 0;
 
     private static final String LOG_TAG = "TerminalView";
+
+    private boolean mIsInA11ySelection = false;
+    private int mA11ySelectionStart = 0;
+    private int mA11ySelectionEnd = 0;
 
     public TerminalView(Context context, AttributeSet attributes) { // NO_UCD (unused code)
         super(context, attributes);
@@ -484,7 +490,7 @@ public final class TerminalView extends View {
         }
     }
 
-    // called by accessibility service exploring what's available
+    // called by accessibility services exploring what's available
     @Override
     public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo node) {
         super.onInitializeAccessibilityNodeInfo(node);
@@ -515,14 +521,27 @@ public final class TerminalView extends View {
             node.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_SELECTION);
         }
 
+        //node.setClassName(android.widget.TextView.class.getName());
+        node.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+
         // behave more like a multiline text view
+        node.setEnabled(isEnabled());
         node.setEditable(true);
         node.setMultiLine(true);
         node.setScrollable(true);
         node.setCanOpenPopup(true);
 
+        node.setFocusable(true);
+        node.setFocused(isFocused());
+        node.setSelected(isSelected());
+        node.setAccessibilityFocused(isAccessibilityFocused());
+
+        updateA11ySelection(text);
+        node.setTextSelection(mA11ySelectionStart, mA11ySelectionEnd);
+
         // add actions that you can do on this thing
-        node.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK);
+        node.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK);
         //node.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK); // already added
         node.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS);
         node.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_COPY);
@@ -536,7 +555,7 @@ public final class TerminalView extends View {
             getResources().getString(R.string.termux_menu_text)));
 
         // Add an action to copy terminal text.
-        // Using a different to the Copy action in the popup, which you can technically
+        // Using a different string to the Copy action in the popup, which you can technically
         // get to if someone tells you it's there. You can't have the same button label
         // do different things in different contexts; hence, different label
         node.addAction(new AccessibilityNodeInfo.AccessibilityAction(
@@ -549,8 +568,49 @@ public final class TerminalView extends View {
             getResources().getString(R.string.paste_text)));
     }
 
+    private void updateA11ySelection(CharSequence text) {
+        if(mEmulator == null) return;
+        if(!mIsInA11ySelection) {
+            int selectionStart = 0;
+            int selectionEnd = 0;
+            int x = 0;
+            int y = 0;
+            boolean onLF = false;
+            boolean matchedCursor = false;
+            for(int i = 0; i < text.length(); ++i) {
+                if(x == mEmulator.getCursorCol()
+                    && y == mEmulator.getCursorRow()) {
+                    matchedCursor = true;
+                    mA11ySelectionStart = mA11ySelectionEnd = i;
+                    break;
+                }
+                if(text.charAt(i) == '\n') {
+                    onLF = true;
+                    x++;
+                    if(y == mEmulator.getCursorRow()
+                    && mEmulator.getCursorCol() > x) {
+                        matchedCursor = true;
+                        mA11ySelectionStart = mA11ySelectionEnd = i;
+                        break;
+                    }
+                } else if(onLF) {
+                    x = 0;
+                    y++;
+                    onLF = false;
+                } else {
+                    ++x;
+                }
+            }
+            if(!matchedCursor) {
+                mA11ySelectionStart = mA11ySelectionEnd = text.length();
+            }
+            Log.d(LOG_TAG, "Selection: " + mA11ySelectionStart + "," + mA11ySelectionEnd + ";;" + mEmulator.getCursorRow() + "," + mEmulator.getCursorCol());
+        }
+    }
+
     @Override
     public boolean performAccessibilityAction(int action, Bundle args) {
+        Log.d(LOG_TAG, "Action " + action);
         // only handle custom actions here, the defaults implemented by super are good enough
         if(action == R.id.a11y_show_termux_menu_id) {
             showContextMenu();
@@ -577,6 +637,21 @@ public final class TerminalView extends View {
             toast.show();
 
             return true;
+        } else if(action == AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY) {
+            Log.d(LOG_TAG, "NEXT GRANULARITY");
+            return super.performAccessibilityAction(action, args);
+        } else if(action == AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY) {
+            Log.d(LOG_TAG, "PREV GRANULARITY");
+            return super.performAccessibilityAction(action, args);
+        } else if(action == AccessibilityNodeInfo.ACTION_COPY) {
+            Log.d(LOG_TAG, "COPY");
+            return super.performAccessibilityAction(action, args);
+        } else if(action == AccessibilityNodeInfo.ACTION_SET_SELECTION) {
+            Log.d(LOG_TAG, "SET SELECTION");
+            return super.performAccessibilityAction(action, args);
+        } else if(action == AccessibilityNodeInfo.ACTION_CLEAR_SELECTION) {
+            Log.d(LOG_TAG, "CLEAR SELECTION");
+            return super.performAccessibilityAction(action, args);
         }
 
         return super.performAccessibilityAction(action, args);
@@ -1410,6 +1485,10 @@ public final class TerminalView extends View {
     public void stopTextSelectionMode() {
         if (hideTextSelectionCursors()) {
             mClient.copyModeChanged(isSelectingText());
+            mIsInA11ySelection = false;
+            if(mAccessibilityEnabled) {
+                sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED);
+            }
             invalidate();
         }
     }
