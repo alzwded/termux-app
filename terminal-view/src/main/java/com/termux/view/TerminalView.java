@@ -36,10 +36,15 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.Scroller;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
+import androidx.core.view.accessibility.AccessibilityViewCommand;
 
 import com.termux.terminal.KeyHandler;
 import com.termux.terminal.Logger;
@@ -48,7 +53,7 @@ import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
 
 /** View displaying and interacting with a {@link TerminalSession}. */
-public final class TerminalView extends View {
+public final class TerminalView extends TextView {
 
     /** Log terminal view key and IME events. */
     private static boolean TERMINAL_VIEW_KEY_LOGGING_ENABLED = false;
@@ -104,6 +109,13 @@ public final class TerminalView extends View {
     private boolean mIsInA11ySelection = false;
     private int mA11ySelectionStart = 0;
     private int mA11ySelectionEnd = 0;
+
+    public TerminalView(Context context) {
+        this(context, null);
+    }
+    public TerminalView(Context context, AttributeSet attributes, int defStyle) {
+        this(context, null);
+    }
 
     public TerminalView(Context context, AttributeSet attributes) { // NO_UCD (unused code)
         super(context, attributes);
@@ -235,6 +247,33 @@ public final class TerminalView extends View {
         // A view is important for accessibility if it fires accessibility events
         // and if it is reported to accessibility services that query the screen.
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+
+        ViewCompat.replaceAccessibilityAction(this, AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SET_SELECTION, null,
+            new AccessibilityViewCommand() {
+                @Override
+                public boolean perform(@NonNull View view, @Nullable CommandArguments arguments) {
+                    Log.d(LOG_TAG, "Action: SET_SELECTION");
+                    return false;
+                }
+            });
+
+        ViewCompat.replaceAccessibilityAction(this, AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLEAR_SELECTION, null,
+            new AccessibilityViewCommand() {
+                @Override
+                public boolean perform(@NonNull View view, @Nullable CommandArguments arguments) {
+                    Log.d(LOG_TAG, "Action: CLEAR_SELECTION");
+                    return false;
+                }
+            });
+
+        ViewCompat.replaceAccessibilityAction(this, AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_COPY, null,
+            new AccessibilityViewCommand() {
+                @Override
+                public boolean perform(@NonNull View view, @Nullable CommandArguments arguments) {
+                    Log.d(LOG_TAG, "Action: COPY");
+                    return false;
+                }
+            });
     }
 
 
@@ -484,7 +523,7 @@ public final class TerminalView extends View {
         super.onPopulateAccessibilityEvent(event);
 
         // add our (most up to date) text
-        final CharSequence text = getText();
+        final CharSequence text = getScreenText();
         if (!TextUtils.isEmpty(text)) {
             event.getText().add(text);
         }
@@ -498,7 +537,7 @@ public final class TerminalView extends View {
             node.setImportantForAccessibility(true);
         }
 
-        final CharSequence text = getText();
+        final CharSequence text = getScreenText();
         node.setText(text);
 
         // why only if text is non-empty? cargo cult, core TextView does this check,
@@ -628,7 +667,7 @@ public final class TerminalView extends View {
             // 3 finger double tap works as copy, but editable fields elsewhere tend
             // to offer a Copy accessibility option
             ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
-            ClipData clip = ClipData.newPlainText("screen text", getText());
+            ClipData clip = ClipData.newPlainText("screen text", getScreenText());
             clipboard.setPrimaryClip(clip);
             Toast toast = Toast.makeText(
                 getContext(),
@@ -677,7 +716,7 @@ public final class TerminalView extends View {
     }
 
     public void setTypeface(Typeface newTypeface) {
-        mRenderer = new TerminalRenderer(mRenderer.mTextSize, newTypeface);
+        mRenderer = new TerminalRenderer(mRenderer!=null ? mRenderer.mTextSize : 12, newTypeface);
         updateSize();
         invalidate();
     }
@@ -1188,7 +1227,7 @@ public final class TerminalView extends View {
         return mTermSession;
     }
 
-    private CharSequence getText() {
+    private CharSequence getScreenText() {
         if (mEmulator == null) return "";
         return mEmulator.getScreen().getSelectedText(0, mTopRow, mEmulator.mColumns, mTopRow + mEmulator.mRows);
     }
